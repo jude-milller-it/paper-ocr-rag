@@ -1,0 +1,793 @@
+app:
+  description: 本地 OCR-RAG V2：图表精确检索、一般检索、跨章节多路检索与证据约束回答
+  icon: 📚
+  icon_background: '#D5F5F6'
+  icon_type: emoji
+  mode: workflow
+  name: OCR_RAG_QA_V2
+  use_icon_as_answer_icon: false
+kind: app
+version: 0.7.0
+dependencies: []
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+  graph:
+    nodes:
+    - id: '991000'
+      type: custom
+      data:
+        title: 开始：输入论文问题
+        type: start
+        desc: ''
+        selected: false
+        variables:
+        - label: 论文问题
+          variable: question
+          type: paragraph
+          required: true
+          max_length: 2000
+      position:
+        x: 50
+        y: 350
+      positionAbsolute:
+        x: 50
+        y: 350
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991010'
+      type: custom
+      data:
+        title: 识别问题类型 / 改写检索词
+        type: code
+        desc: ''
+        selected: false
+        code_language: python3
+        code: "import re\n\ndef main(question: str) -> dict:\n    q = (question or '').strip()\n    en = re.search(r'(?i)\\\
+          b(fig(?:ure)?|table)\\s*[.：:#-]?\\s*0*(\\d{1,3})\\b', q)\n    zh = re.search(r'(图|表)\\s*0*(\\d{1,3})(?!\\\
+          d)', q)\n    typ = ''\n    num = 0\n    if en:\n        typ = 'Figure' if en.group(1).lower().startswith('fig')\
+          \ else 'Table'\n        num = int(en.group(2))\n    elif zh:\n        typ = 'Figure' if zh.group(1) ==\
+          \ '图' else 'Table'\n        num = int(zh.group(2))\n    label = (typ + ' ' + str(num)) if typ else ''\n\
+          \    overview_pattern = (r'主要贡献|创新点|论文贡献|贡献是什么|全文|整篇|总结|概述|研究成果|'\n                        r'综合分析|核心工作|核心创新|主要结论|贡献包括|'\n\
+          \                        r'\\bcontributions?\\b|\\bnovelt(?:y|ies)\\b|\\bsummar(?:y|ize|ise)\\b|\\boverview\\\
+          b')\n    is_overview = bool(re.search(overview_pattern, q, flags=re.I))\n    route = 'exact' if label\
+          \ else ('overview' if is_overview else 'general')\n    # 不能绑定某一篇论文：查询词都是通用的，任意论文均可用。\n    return {\n \
+          \       'route': route,\n        'label': label,\n        'query_exact': (label + ' ' + q + ' ' + label\
+          \ + ' results caption data accuracy')[:240],\n        'query_general': q[:240],\n        'query_method':\
+          \ ('paper proposed new method model approach novelty architecture methodology '\n                    \
+          \     '本文提出的方法 模型 主要创新 联合表示 ' + q)[:240],\n        'query_dataset': ('paper contribution created constructed\
+          \ dataset resource benchmark corpus '\n                          '本文新构建的数据集 研究资源 数据来源 ' + q)[:240],\n\
+          \        'query_results': ('paper experiments results comparisons ablation accuracy improvement '\n  \
+          \                        'conclusions 本文实验结果 性能对比 结论 ' + q)[:240],\n    }\n"
+        variables:
+        - value_selector:
+          - '991000'
+          - question
+          variable: question
+        outputs:
+          route:
+            type: string
+          label:
+            type: string
+          query_exact:
+            type: string
+          query_general:
+            type: string
+          query_method:
+            type: string
+          query_dataset:
+            type: string
+          query_results:
+            type: string
+      position:
+        x: 345
+        y: 350
+      positionAbsolute:
+        x: 345
+        y: 350
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991020'
+      type: custom
+      data:
+        title: 是否指定 Figure / Table
+        type: if-else
+        desc: ''
+        selected: false
+        cases:
+        - id: 'true'
+          case_id: 'true'
+          logical_operator: and
+          conditions:
+          - id: case-exact-1
+            variable_selector:
+            - '991010'
+            - route
+            comparison_operator: is
+            value: exact
+            varType: string
+      position:
+        x: 645
+        y: 350
+      positionAbsolute:
+        x: 645
+        y: 350
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991030'
+      type: custom
+      data:
+        title: 图表精确检索
+        type: knowledge-retrieval
+        desc: ''
+        selected: false
+        dataset_ids: []
+        query_variable_selector:
+        - '991010'
+        - query_exact
+        retrieval_mode: multiple
+        multiple_retrieval_config:
+          top_k: 6
+          reranking_enable: false
+          reranking_mode: reranking_model
+          score_threshold_enabled: false
+          score_threshold: 0
+        metadata_filtering_mode: disabled
+      position:
+        x: 960
+        y: 60
+      positionAbsolute:
+        x: 960
+        y: 60
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991031'
+      type: custom
+      data:
+        title: 图表编号过滤 + 来源绑定
+        type: code
+        desc: ''
+        selected: false
+        code_language: python3
+        code: "import re\n\ndef main(records: list, label: str) -> dict:\n    records = records or []\n    m = re.match(r'^(Figure|Table)\\\
+          s+(\\d+)$', label or '', re.I)\n    if not m:\n        return {'evidence': '【无对应图表证据】未识别到明确图表编号。'}\n \
+          \   typ, num = m.group(1), int(m.group(2))\n    patt = re.compile(r'\\b(?:'+ ('fig(?:ure)?' if typ.lower()=='figure'\
+          \ else 'table') +r')\\s*[.：:#-]?\\s*0*'+str(num)+r'\\b', re.I)\n    filetag = (('FIGURE' if typ.lower()=='figure'\
+          \ else 'TABLE') + '_' + f'{num:02d}')\n    zh = ('图' if typ.lower()=='figure' else '表') + str(num)\n \
+          \   out = []\n    for item in records:\n        if not isinstance(item, dict): continue\n        content\
+          \ = str(item.get('content') or '').strip()\n        md = item.get('metadata') or {}\n        title = str(item.get('title')\
+          \ or md.get('document_name') or '')\n        head = content[:500]\n        # only this figure/table; never\
+          \ borrow labels from adjacent chunks\n        score = 3 if filetag in title.upper() else (2 if patt.search(head)\
+          \ else (1 if zh in head else 0))\n        if score == 0 or not content: continue\n        out.append((score,\
+          \ item, content, title))\n    out.sort(key=lambda x:-x[0])\n    if not out:\n        return {'evidence':\
+          \ f'【无对应图表证据】未检索到明确属于 {label} 的片段；严禁使用其他 Figure / Table 替代。'}\n    lines=[]\n    used=set()\n    for _,item,content,title\
+          \ in out[:3]:\n        if content in used: continue\n        used.add(content)\n        md=item.get('metadata')\
+          \ or {}\n        lines.append('【来源：'+title+'；分段 '+str(md.get('segment_position','未知'))+'】\\n'+content[:3000])\n\
+          \    return {'evidence': ('\\n\\n'.join(lines))[:6000]}\n"
+        variables:
+        - value_selector:
+          - '991030'
+          - result
+          variable: records
+        - value_selector:
+          - '991010'
+          - label
+          variable: label
+        outputs:
+          evidence:
+            type: string
+      position:
+        x: 1260
+        y: 60
+      positionAbsolute:
+        x: 1260
+        y: 60
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991040'
+      type: custom
+      data:
+        title: 是否为综合分析问题
+        type: if-else
+        desc: ''
+        selected: false
+        cases:
+        - id: 'true'
+          case_id: 'true'
+          logical_operator: and
+          conditions:
+          - id: case-overview-1
+            variable_selector:
+            - '991010'
+            - route
+            comparison_operator: is
+            value: overview
+            varType: string
+      position:
+        x: 955
+        y: 540
+      positionAbsolute:
+        x: 955
+        y: 540
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991050'
+      type: custom
+      data:
+        title: 方法与创新检索
+        type: knowledge-retrieval
+        desc: ''
+        selected: false
+        dataset_ids: []
+        query_variable_selector:
+        - '991010'
+        - query_method
+        retrieval_mode: multiple
+        multiple_retrieval_config:
+          top_k: 4
+          reranking_enable: false
+          reranking_mode: reranking_model
+          score_threshold_enabled: false
+          score_threshold: 0
+        metadata_filtering_mode: disabled
+      position:
+        x: 1260
+        y: 310
+      positionAbsolute:
+        x: 1260
+        y: 310
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991051'
+      type: custom
+      data:
+        title: 数据集与资源检索
+        type: knowledge-retrieval
+        desc: ''
+        selected: false
+        dataset_ids: []
+        query_variable_selector:
+        - '991010'
+        - query_dataset
+        retrieval_mode: multiple
+        multiple_retrieval_config:
+          top_k: 4
+          reranking_enable: false
+          reranking_mode: reranking_model
+          score_threshold_enabled: false
+          score_threshold: 0
+        metadata_filtering_mode: disabled
+      position:
+        x: 1260
+        y: 505
+      positionAbsolute:
+        x: 1260
+        y: 505
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991052'
+      type: custom
+      data:
+        title: 实验与结论检索
+        type: knowledge-retrieval
+        desc: ''
+        selected: false
+        dataset_ids: []
+        query_variable_selector:
+        - '991010'
+        - query_results
+        retrieval_mode: multiple
+        multiple_retrieval_config:
+          top_k: 4
+          reranking_enable: false
+          reranking_mode: reranking_model
+          score_threshold_enabled: false
+          score_threshold: 0
+        metadata_filtering_mode: disabled
+      position:
+        x: 1260
+        y: 700
+      positionAbsolute:
+        x: 1260
+        y: 700
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991060'
+      type: custom
+      data:
+        title: 多路证据融合 + 覆盖检查
+        type: code
+        desc: ''
+        selected: false
+        code_language: python3
+        code: "import re\n\ndef main(methods: list, datasets: list, results: list) -> dict:\n    groups=[('提出的方法/核心创新',methods),('数据集/研究资源',datasets),('本文实验结果/结论',results)]\n\
+          \    seen=set()\n    sections=[]\n    for label,records in groups:\n        ranked=[]\n        for item\
+          \ in (records or []):\n            if not isinstance(item,dict): continue\n            c=str(item.get('content')\
+          \ or '').strip()\n            if len(c)<50 or c in seen: continue\n            md=item.get('metadata')\
+          \ or {}\n            title=str(item.get('title') or md.get('document_name') or '')\n            upper=title.upper()\n\
+          \            boost=1 if '__OVERVIEW' in upper else 0\n            if label.startswith('提出') and ('ABSTRACT'\
+          \ in upper or 'METHOD' in upper or 'INTRODUCTION' in upper): boost+=2\n            if label.startswith('数据')\
+          \ and ('DATASET' in upper or 'AVA_' in upper or 'DATA' in upper): boost+=2\n            if label.startswith('本文实验')\
+          \ and ('EXPERIMENT' in upper or 'CONCLUSION' in upper or 'CLASSIFICATION' in upper): boost+=2\n      \
+          \      # source citations of other works should not be treated as this paper's innovation\n          \
+          \  if re.search(r'\\baccording to (?:the experimental results|results).*?\\[\\d+\\]', c, re.I): boost-=2\n\
+          \            ranked.append((boost,item,c,title))\n        ranked.sort(key=lambda x:-x[0])\n        parts=[]\n\
+          \        for _,item,c,title in ranked:\n            if c in seen: continue\n            seen.add(c)\n\
+          \            md=item.get('metadata') or {}\n            parts.append('【来源：'+title+'；分段 '+str(md.get('segment_position','未知'))+'】\\\
+          n'+c[:1250])\n            if len(parts)==3: break\n        sections.append('## '+label+'\\n'+('\\n\\n'.join(parts)\
+          \ if parts else '【当前无对应检索证据】'))\n    return {'evidence': ('\\n\\n'.join(sections))[:10500]}\n"
+        variables:
+        - value_selector:
+          - '991050'
+          - result
+          variable: methods
+        - value_selector:
+          - '991051'
+          - result
+          variable: datasets
+        - value_selector:
+          - '991052'
+          - result
+          variable: results
+        outputs:
+          evidence:
+            type: string
+      position:
+        x: 1620
+        y: 500
+      positionAbsolute:
+        x: 1620
+        y: 500
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991070'
+      type: custom
+      data:
+        title: 常规混合检索
+        type: knowledge-retrieval
+        desc: ''
+        selected: false
+        dataset_ids: []
+        query_variable_selector:
+        - '991010'
+        - query_general
+        retrieval_mode: multiple
+        multiple_retrieval_config:
+          top_k: 6
+          reranking_enable: false
+          reranking_mode: reranking_model
+          score_threshold_enabled: false
+          score_threshold: 0
+        metadata_filtering_mode: disabled
+      position:
+        x: 1255
+        y: 950
+      positionAbsolute:
+        x: 1255
+        y: 950
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991071'
+      type: custom
+      data:
+        title: 证据整理与去重
+        type: code
+        desc: ''
+        selected: false
+        code_language: python3
+        code: "def main(records: list) -> dict:\n    out=[]\n    seen=set()\n    for item in (records or []):\n\
+          \        if not isinstance(item,dict): continue\n        content=str(item.get('content') or '').strip()\n\
+          \        if len(content)<45 or content in seen: continue\n        seen.add(content)\n        md=item.get('metadata')\
+          \ or {}\n        title=str(item.get('title') or md.get('document_name') or '未知文档')\n        out.append('【来源：'+title+'；分段\
+          \ '+str(md.get('segment_position','未知'))+'】\\n'+content[:1800])\n        if len(out)>=5: break\n    return\
+          \ {'evidence': ('\\n\\n'.join(out))[:7000] if out else '【证据不足】知识库未检索到相关正文。'}\n"
+        variables:
+        - value_selector:
+          - '991070'
+          - result
+          variable: records
+        outputs:
+          evidence:
+            type: string
+      position:
+        x: 1600
+        y: 950
+      positionAbsolute:
+        x: 1600
+        y: 950
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991090'
+      type: custom
+      data:
+        title: 汇总互斥分支证据
+        type: variable-aggregator
+        desc: ''
+        selected: false
+        output_type: string
+        variables:
+        - - '991031'
+          - evidence
+        - - '991060'
+          - evidence
+        - - '991071'
+          - evidence
+      position:
+        x: 1940
+        y: 380
+      positionAbsolute:
+        x: 1940
+        y: 380
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991100'
+      type: custom
+      data:
+        title: 论文回答（证据约束）
+        type: llm
+        desc: ''
+        selected: false
+        model:
+          provider: langgenius/ollama/ollama
+          name: qwen2.5:3b
+          mode: chat
+          completion_params:
+            temperature: 0.1
+            max_tokens: 1200
+        prompt_template:
+        - id: d2d2d2d2-0011-4000-8000-000000000001
+          role: system
+          text: '你是科研论文检索问答助手。只能依据下文【检索证据】回答，不可编造或调用论文外的猜测。
+
+
+            证据使用原则：
+
+            1. 如果问题明确指定 Figure、Fig.、Table、图或表的编号，只用该编号对应的图表证据。禁止把其他表格的方法名和数字拼接。
+
+            2. 数值、方法名称、数据集名称、实验结论必须在同一证据中找到对应关系；不要从不同片段硬凑。
+
+            3. 综合问题应分别判断“本文真正提出的方法/创新”“本文新构建的数据集/资源”“本文自己的实验对比/结论”，不够则明确说明缺哪部分。
+
+            4. 一切“According to [n]”“prior work”“其他研究”的结论不能当成本文创新或本文实验结果。
+
+            5. 图表视觉模型描述如果标记“未核验”，说明来自视觉模型观察；不要声称经过原图人工核实。
+
+            6. 如证据显示【无对应图表证据】或【证据不足】，直接说明暂时未检索到，严禁用邻近图表代替。
+
+            7. 中文提问中文回答，英文提问英文回答。回答要具体；数字逐项列清楚。
+
+            8. 引用来源时，用提供的【来源】文档名或文中明确页码、Figure/Table；没有页码不要编造。引用真实存在的来源，不可虚构。
+
+
+            在回答前默默核验：问题目标是否匹配？每个名称和数字是否成对出现在同一个证据？是否把引用研究误认为本文贡献？
+
+
+            【检索证据】
+
+            {{#991090.output#}}
+
+            '
+        - id: d2d2d2d2-0012-4000-8000-000000000002
+          role: user
+          text: '{{#991000.question#}}'
+        context:
+          enabled: false
+          variable_selector: []
+        memory:
+          window:
+            enabled: false
+            size: 10
+          role_prefix:
+            user: ''
+            assistant: ''
+        vision:
+          enabled: false
+      position:
+        x: 2250
+        y: 380
+      positionAbsolute:
+        x: 2250
+        y: 380
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    - id: '991110'
+      type: custom
+      data:
+        title: 返回最终答案
+        type: end
+        desc: ''
+        selected: false
+        outputs:
+        - variable: answer
+          value_selector:
+          - '991100'
+          - text
+      position:
+        x: 2550
+        y: 380
+      positionAbsolute:
+        x: 2550
+        y: 380
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      width: 245
+      height: 110
+    edges:
+    - id: 991000-991010-source-target
+      type: custom
+      source: '991000'
+      target: '991010'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: start
+        targetType: code
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991010-991020-source-target
+      type: custom
+      source: '991010'
+      target: '991020'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: code
+        targetType: if-else
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991020-991030-true-target
+      type: custom
+      source: '991020'
+      target: '991030'
+      sourceHandle: 'true'
+      targetHandle: target
+      data:
+        sourceType: if-else
+        targetType: knowledge-retrieval
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991030-991031-source-target
+      type: custom
+      source: '991030'
+      target: '991031'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: knowledge-retrieval
+        targetType: code
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991031-991090-source-target
+      type: custom
+      source: '991031'
+      target: '991090'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: code
+        targetType: variable-aggregator
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991020-991040-false-target
+      type: custom
+      source: '991020'
+      target: '991040'
+      sourceHandle: 'false'
+      targetHandle: target
+      data:
+        sourceType: if-else
+        targetType: if-else
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991040-991050-true-target
+      type: custom
+      source: '991040'
+      target: '991050'
+      sourceHandle: 'true'
+      targetHandle: target
+      data:
+        sourceType: if-else
+        targetType: knowledge-retrieval
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991040-991051-true-target
+      type: custom
+      source: '991040'
+      target: '991051'
+      sourceHandle: 'true'
+      targetHandle: target
+      data:
+        sourceType: if-else
+        targetType: knowledge-retrieval
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991040-991052-true-target
+      type: custom
+      source: '991040'
+      target: '991052'
+      sourceHandle: 'true'
+      targetHandle: target
+      data:
+        sourceType: if-else
+        targetType: knowledge-retrieval
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991050-991060-source-target
+      type: custom
+      source: '991050'
+      target: '991060'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: knowledge-retrieval
+        targetType: code
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991051-991060-source-target
+      type: custom
+      source: '991051'
+      target: '991060'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: knowledge-retrieval
+        targetType: code
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991052-991060-source-target
+      type: custom
+      source: '991052'
+      target: '991060'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: knowledge-retrieval
+        targetType: code
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991060-991090-source-target
+      type: custom
+      source: '991060'
+      target: '991090'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: code
+        targetType: variable-aggregator
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991040-991070-false-target
+      type: custom
+      source: '991040'
+      target: '991070'
+      sourceHandle: 'false'
+      targetHandle: target
+      data:
+        sourceType: if-else
+        targetType: knowledge-retrieval
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991070-991071-source-target
+      type: custom
+      source: '991070'
+      target: '991071'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: knowledge-retrieval
+        targetType: code
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991071-991090-source-target
+      type: custom
+      source: '991071'
+      target: '991090'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: code
+        targetType: variable-aggregator
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991090-991100-source-target
+      type: custom
+      source: '991090'
+      target: '991100'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: variable-aggregator
+        targetType: llm
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    - id: 991100-991110-source-target
+      type: custom
+      source: '991100'
+      target: '991110'
+      sourceHandle: source
+      targetHandle: target
+      data:
+        sourceType: llm
+        targetType: end
+        isInIteration: false
+        isInLoop: false
+      zIndex: 0
+    viewport:
+      x: 0
+      y: 0
+      zoom: 0.65

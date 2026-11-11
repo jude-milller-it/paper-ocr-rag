@@ -1,0 +1,11 @@
+# Never commit API keys, personal configuration, PDFs or generated OCR data.
+key.txt
+.env
+*.key
+.idea/
+__pycache__/
+*.pyc
+data/input/*
+!data/input/.gitkeep
+data/output/
+.env.*
